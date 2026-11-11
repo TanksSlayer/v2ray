@@ -22,6 +22,8 @@ show_help() {
             "   i, info [name]                                  查看配置"
             "   qr [name]                                       二维码信息"
             "   url [name]                                      URL 信息"
+            "   adduser [name] [uuid]                           添加用户 (多用户)"
+            "   deluser [name] <uuid>                           删除用户 (多用户)"
             "   log                                             查看日志"
             "   logerr                                          查看错误日志\n"
             "更改:"
