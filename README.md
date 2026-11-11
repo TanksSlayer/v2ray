@@ -21,6 +21,7 @@
 - 一键添加 VLESS-(WS/H2/gRPC)-TLS
 - 一键添加 Trojan-(WS/H2/gRPC)-TLS
 - 一键添加 VMess-(TCP/mKCP/QUIC) 动态端口
+- 支持多用户 (VMess/VLESS/Trojan): 一键添加/删除用户, 查看节点时展示所有用户的分享链接
 - 一键启用 BBR
 - 一键更改伪装网站
 - 一键更改 (端口/UUID/密码/域名/路径/加密方式/SNI/动态端口/等...)
@@ -48,6 +49,19 @@
 
 [V2Ray搭建详细图文教程](https://github.com/233boy/v2ray/wiki/V2Ray%E6%90%AD%E5%BB%BA%E8%AF%A6%E7%BB%86%E5%9B%BE%E6%96%87%E6%95%99%E7%A8%8B)
 
+# 多用户
+
+仅 VMess / VLESS / Trojan 配置支持多用户:
+
+```bash
+v2ray adduser <配置名> [uuid]   # 添加用户, 不指定 uuid 则自动生成
+v2ray deluser <配置名> <uuid>   # 删除用户, 至少保留一个
+v2ray info <配置名>            # 展示所有用户的分享链接
+v2ray url <配置名>             # 输出所有用户的 URL
+v2ray qr <配置名>              # 输出所有用户的二维码
+```n
+更改端口/域名/路径等配置时会保留已添加的用户.
+
 # 帮助
 
 使用: `v2ray help`
@@ -67,7 +81,9 @@ Usage: v2ray [options]... [args]...
    d, del [name]                                   删除配置**
    i, info [name]                                  查看配置
    qr [name]                                       二维码信息
-   url [name]                                      URL 信息
+   url [name]                                      URL 信息 (展示所有用户)
+   adduser [name] [uuid]                           添加用户 (多用户)
+   deluser [name] <uuid>                           删除用户 (多用户)
    log                                             查看日志
    logerr                                          查看错误日志
 
