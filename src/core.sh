@@ -343,6 +343,10 @@ create() {
         esac
         is_sniffing='sniffing:{enabled:true,destOverride:["http","tls"]}'
         is_new_json=$(jq '{inbounds:[{tag:'\"$is_config_name\"',port:'"$port"','"$is_listen"',protocol:'\"$is_protocol\"','"$json_str"','"$is_sniffing"'}]}' <<<{})
+        # keep extra users when the config is regenerated
+        [[ $is_extra_clients && $is_extra_clients != '[]' && $is_protocol =~ ^(vmess|vless|trojan)$ ]] && {
+            is_new_json=$(jq --argjson e "$is_extra_clients" '.inbounds[0].settings.clients+=$e' <<<$is_new_json)
+        }
         if [[ $is_dynamic_port ]]; then
             [[ ! $is_dynamic_port_range ]] && get dynamic-port
             is_new_dynamic_port_json=$(jq '{inbounds:[{tag:'\"$is_config_name-link.json\"',port:'\"$is_dynamic_port_range\"','"$is_listen"',protocol:"vmess",'"$is_stream"','"$is_sniffing"',allocate:{strategy:"random"}}]}' <<<{})
@@ -1238,6 +1242,10 @@ get() {
             fi
             [[ ! $kcp_seed ]] && is_no_kcp_seed=1
             is_config_name=$is_config_file
+            # extra users (clients[1:]), the first user is kept in $uuid / $trojan_password
+            is_extra_clients=$(jq -c '[.inbounds[0].settings.clients[1:][]?]' <<<$is_json_str)
+            readarray -t is_extra_ids <<<"$(jq -r '.inbounds[0].settings.clients[1:][]? | (.id // .password)' <<<$is_json_str)"
+            [[ ! ${is_extra_ids[0]} ]] && is_extra_ids=()
             if [[ $is_dynamic_port ]]; then
                 is_dynamic_port_file=$is_conf_dir/$is_dynamic_port
                 is_dynamic_port_range=$(jq -r '.inbounds[0].port' $is_dynamic_port_file)
@@ -1559,6 +1567,19 @@ info() {
         is_info_str=($is_protocol 127.0.0.1 $port)
         ;;
     esac
+    # share links of the extra users
+    is_user_urls=()
+    if [[ $is_url && ! $is_sub_info && ${#is_extra_ids[@]} -gt 0 ]]; then
+        for v in "${is_extra_ids[@]}"; do
+            is_tmp_url=$(
+                is_sub_info=1 is_dont_show_info=1
+                uuid=$v trojan_password=$v
+                info
+                echo "$is_url"
+            )
+            [[ $is_tmp_url ]] && is_user_urls+=("$is_tmp_url")
+        done
+    fi
     [[ $is_dont_show_info || $is_gen || $is_dont_auto_exit ]] && return # dont show info
     msg "-------------- $is_config_name -------------"
     for ((i = 0; i < ${#is_info_show[@]}; i++)); do
@@ -1577,6 +1598,10 @@ info() {
         msg "------------- ${info_list[12]} -------------"
         msg "\e[4;${is_color}m${is_url}\e[0m"
     fi
+    for ((i = 0; i < ${#is_user_urls[@]}; i++)); do
+        msg "------------- 用户$((i + 2)) ${info_list[12]} -------------"
+        msg "\e[4;${is_color}m${is_user_urls[$i]}\e[0m"
+    done
     if [[ $is_no_auto_tls ]]; then
         is_tmp_path=$path
         [[ $net == 'grpc' ]] && is_tmp_path="/$path/*"
@@ -1586,6 +1611,38 @@ info() {
         msg "\e[41m帮助(help)\e[0m: $(msg_ul https://233boy.com/$is_core/no-auto-tls/)"
     fi
     footer_msg
+}
+
+# multi-user: user add|del <config> [uuid]
+user() {
+    local is_user_act=$1 is_user_id=$3 is_user_old_json is_user_n
+    [[ $is_user_act != 'add' && $is_user_act != 'del' ]] && err "用法: $is_core user add|del <配置名> [uuid]"
+    get file $2
+    is_json_file=$is_conf_dir/$is_config_file
+    is_user_old_json=$(cat $is_json_file)
+    [[ ! $(jq -r '.inbounds[0].protocol' <<<$is_user_old_json | grep -E '^(vmess|vless|trojan)$') ]] && err "($is_config_file) 不支持多用户."
+    case $is_user_act in
+    add)
+        [[ ! $is_user_id ]] && get_uuid && is_user_id=$tmp_uuid
+        [[ ! $(is_test uuid $is_user_id) ]] && err "($is_user_id) 不是一个有效的 UUID."
+        [[ $(jq --arg id $is_user_id '[.inbounds[0].settings.clients[] | (.id // .password)] | index($id)' <<<$is_user_old_json) != 'null' ]] && err "用户已存在: $is_user_id"
+        is_new_json=$(jq --arg id $is_user_id '.inbounds[0].settings.clients += [(.inbounds[0].settings.clients[0] | if has("id") then .id=$id else .password=$id end)]' <<<$is_user_old_json)
+        ;;
+    del)
+        [[ ! $is_user_id ]] && err "请输入要删除的用户 UUID."
+        is_user_n=$(jq '.inbounds[0].settings.clients | length' <<<$is_user_old_json)
+        [[ $is_user_n -le 1 ]] && err "至少需要保留一个用户."
+        [[ $(jq --arg id $is_user_id '[.inbounds[0].settings.clients[] | (.id // .password)] | index($id)' <<<$is_user_old_json) == 'null' ]] && err "无法找到用户: $is_user_id"
+        is_new_json=$(jq --arg id $is_user_id '.inbounds[0].settings.clients |= map(select((.id // .password) != $id))' <<<$is_user_old_json)
+        ;;
+    esac
+    api del $is_json_file &>/dev/null
+    cat <<<$is_new_json >$is_json_file
+    api add $is_json_file &>/dev/null
+    [[ $is_api_fail ]] && manage restart &
+    is_new_json=
+    [[ $is_user_act == 'add' ]] && _green "\n已添加用户: $is_user_id\n" || _green "\n已删除用户: $is_user_id\n"
+    is_protocol= is_config_file= info $2
 }
 
 # footer msg
@@ -1606,22 +1663,27 @@ url_qr() {
     is_dont_show_info=1
     info $2
     if [[ $is_url ]]; then
+        is_all_urls=("$is_url" "${is_user_urls[@]}")
         [[ $1 == 'url' ]] && {
-            msg "\n------------- $is_config_name & URL 链接 -------------"
-            msg "\n\e[${is_color}m${is_url}\e[0m\n"
+            for ((i = 0; i < ${#is_all_urls[@]}; i++)); do
+                msg "\n------------- $is_config_name & 用户$((i + 1)) & URL 链接 -------------"
+                msg "\n\e[${is_color}m${is_all_urls[$i]}\e[0m\n"
+            done
             footer_msg
         } || {
-            link="https://233boy.github.io/tools/qr.html#${is_url}"
-            msg "\n------------- $is_config_name & QR code 二维码 -------------"
-            msg
-            if [[ $(type -P qrencode) ]]; then
-                qrencode -t ANSI "${is_url}"
-            else
-                msg "请安装 qrencode: $(_green "$cmd update -y; $cmd install qrencode -y")"
-            fi
-            msg
-            msg "如果无法正常显示或识别, 请使用下面的链接来生成二维码:"
-            msg "\n\e[4;${is_color}m${link}\e[0m\n"
+            for ((i = 0; i < ${#is_all_urls[@]}; i++)); do
+                link="https://233boy.github.io/tools/qr.html#${is_all_urls[$i]}"
+                msg "\n------------- $is_config_name & 用户$((i + 1)) & QR code 二维码 -------------"
+                msg
+                if [[ $(type -P qrencode) ]]; then
+                    qrencode -t ANSI "${is_all_urls[$i]}"
+                else
+                    msg "请安装 qrencode: $(_green "$cmd update -y; $cmd install qrencode -y")"
+                fi
+                msg
+                msg "如果无法正常显示或识别, 请使用下面的链接来生成二维码:"
+                msg "\n\e[4;${is_color}m${link}\e[0m\n"
+            done
             footer_msg
         }
     else
@@ -1858,6 +1920,13 @@ main() {
         ;;
     url | qr)
         url_qr $@
+        ;;
+    user | adduser | deluser)
+        case $1 in
+        adduser) user add ${@:2} ;;
+        deluser) user del ${@:2} ;;
+        *) user ${@:2} ;;
+        esac
         ;;
     un | uninstall)
         uninstall
